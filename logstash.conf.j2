@@ -1,0 +1,330 @@
+input {
+    s3 {
+        region => "{{ s3.region }}"
+        bucket => "{{ s3.bucket }}"
+        prefix => "{{ s3.prefix }}"
+        interval => "{{ s3.interval }}"
+        codec => multiline {
+            pattern => "^[0-9]{1,3}[.][0-9]{1,3}[.][0-9]{1,3}[.][0-9]{1,3}|^IP|^0"
+            what => "previous"
+            negate=> true
+        }
+        add_field => {
+            "[fields][log_type]" => "qualys"
+        }
+    }
+}
+
+filter {
+    if [fields][log_type] == "qualys" {
+        mutate {
+            split => ["message","~"]
+            add_field => {
+                "IP" => "%{[message][0]}"
+                "Network" => "%{[message][1]}"
+                "DNS" => "%{[message][2]}"
+                "NetBIOS" => "%{[message][3]}"
+                "Tracking Method" => "%{[message][4]}"
+                "OS" => "%{[message][5]}"
+                "IP Status" => "%{[message][6]}"
+                "QID" => "%{[message][7]}"
+                "Title" => "%{[message][8]}"
+                "Vuln Status" => "%{[message][9]}"
+                "Type" => "%{[message][10]}"
+                "Severity" => "%{[message][11]}"
+                "Port" => "%{[message][12]}"
+                "Protocol" => "%{[message][13]}"
+                "FQDN" => "%{[message][14]}"
+                "SSL" => "%{[message][15]}"
+                "First Detected" => "%{[message][16]}"
+                "Last Detected" => "%{[message][17]}"
+                "Times Detected" => "%{[message][18]}"
+                "Date Last Fixed" => "%{[message][19]}"
+                "CVE ID" => "%{[message][20]}"
+                "Vendor Reference" => "%{[message][21]}"
+                "Bugtraq ID" => "%{[message][22]}"
+                "CVSS" => "%{[message][23]}"
+                "CVSS Base" => "%{[message][24]}"
+                "CVSS Temporal" => "%{[message][25]}"
+                "CVSS Environment" => "%{[message][26]}"
+                "CVSS3" => "%{[message][27]}"
+                "CVSS3 Base" => "%{[message][28]}"
+                "CVSS3 Temporal" => "%{[message][29]}"
+                "Threat" => "%{[message][30]}"
+                "Impact" => "%{[message][31]}"
+                "Solution" => "%{[message][32]}"
+                "Exploitability" => "%{[message][33]}"
+                "Associated Malware" => "%{[message][34]}"
+                "Results" => "%{[message][35]}"
+                "PCI Vuln" => "%{[message][36]}"
+                "Ticket State" => "%{[message][37]}"
+                "Instance" => "%{[message][38]}"
+                "OS CPE" => "%{[message][39]}"
+                "Category" => "%{[message][40]}"
+            }
+            remove_field => [ "message" ]
+        }
+        if [IP] == "IP" or [IP] == "0" {
+            drop {}
+        }
+        date {
+            match => [
+                "First Detected" ,"MM/dd/yyyy HH:mm"
+            ]
+            target => "first_detected"
+        }
+        date {
+            match => [
+                "Last Detected" ,"MM/dd/yyyy HH:mm"
+            ]
+            target => "last_detected"
+        }
+        date {
+            match => [
+                "First Detected" ,"MM/dd/yyyy HH:mm:ss"
+            ]
+            target => "first_detected"
+        }
+        date {
+            match => [
+                "Last Detected" ,"MM/dd/yyyy HH:mm:ss"
+            ]
+            target => "last_detected"
+        }
+        ruby { code => "event.set('duration', event.get('last_detected').to_i - event.get('first_detected').to_i)" }
+        mutate {
+            remove_field => "[last_detected]"
+            remove_field => "[first_detected]"
+        }
+        if [CVSS3 Base] != "" {
+            grok {
+                match => [
+                        "CVSS3 Base", "^%{BASE16FLOAT:cvss_score}"
+                ]
+            }
+            mutate {
+                convert => {
+                    "cvss_score" => "float"
+                }
+            }
+            if [cvss_score] == 0.0 {
+                mutate {
+                    add_field => {
+                        "[fields][log_severity]" => "None"
+                        "[fields][log_overdue]" => false
+                        "[overdue]" => 0
+                    }
+                    remove_field => "[cvss_score]"
+                }
+            } else if [cvss_score] >= 0.1 and [cvss_score] <= 3.9 {
+                mutate {
+                    add_field => {
+                        "[fields][log_severity]" => "Low"
+                    }
+                    remove_field => "[cvss_score]"
+                }
+                ruby { code => "event.set('overdue', event.get('duration') - 31104000)" }
+                if [duration] >= 31104000 {
+                    mutate {
+                        add_field => {
+                            "[fields][log_overdue]" => true
+                        }
+                    }
+                } else {
+                    mutate {
+                        add_field => {
+                            "[fields][log_overdue]" => false
+                        }
+                    }
+                }
+            } else if [cvss_score] >= 4.0 and [cvss_score] <= 6.9 {
+                mutate {
+                    add_field => {
+                        "[fields][log_severity]" => "Medium"
+                    }
+                    remove_field => "[cvss_score]"
+                }
+                ruby { code => "event.set('overdue', event.get('duration') - 15552000)" }
+                if [duration] >= 15552000 {
+                    mutate {
+                        add_field => {
+                            "[fields][log_overdue]" => true
+                        }
+                    }
+                } else {
+                    mutate {
+                        add_field => {
+                            "[fields][log_overdue]" => false
+                        }
+                    }
+                }
+            } else if [cvss_score] >= 7.0 and [cvss_score] <= 8.9 {
+                mutate {
+                    add_field => {
+                        "[fields][log_severity]" => "High"
+                    }
+                    remove_field => "[cvss_score]"
+                }
+                ruby { code => "event.set('overdue', event.get('duration') - 2592000)" }
+                if [duration] >= 2592000 {
+                    mutate {
+                        add_field => {
+                            "[fields][log_overdue]" => true
+                        }
+                    }
+                } else {
+                    mutate {
+                        add_field => {
+                            "[fields][log_overdue]" => false
+                        }
+                    }
+                }
+            } else if [cvss_score] >= 9.0 and [cvss_score] <= 10.0 {
+                mutate {
+                    add_field => {
+                        "[fields][log_severity]" => "Critical"
+                    }
+                    remove_field => "[cvss_score]"
+                }
+                ruby { code => "event.set('overdue', event.get('duration') - 1209600)" }
+                if [duration] >= 1209600 {
+                    mutate {
+                        add_field => {
+                            "[fields][log_overdue]" => true
+                        }
+                    }
+                } else {
+                    mutate {
+                        add_field => {
+                            "[fields][log_overdue]" => false
+                        }
+                    }
+                }
+            }
+        } else if [CVSS3 Base] == "" {
+            if [Severity] == "1" {
+                mutate {
+                    add_field => {
+                        "[fields][log_severity]" => "None"
+                        "[fields][log_overdue]" => false
+                        "[overdue]" => 0
+                    }
+                }
+            } else if [Severity] == "2" {
+                mutate {
+                    add_field => {
+                        "[fields][log_severity]" => "Low"
+                    }
+                }
+                ruby { code => "event.set('overdue', event.get('duration') - 31104000)" }
+                if [duration] >= 31104000 {
+                    mutate {
+                        add_field => {
+                            "[fields][log_overdue]" => true
+                        }
+                    }
+                } else {
+                    mutate {
+                        add_field => {
+                            "[fields][log_overdue]" => false
+                        }
+                    }
+                }
+            } else if [Severity] == "3" {
+                mutate {
+                    add_field => {
+                        "[fields][log_severity]" => "Medium"
+                    }
+                }
+                ruby { code => "event.set('overdue', event.get('duration') - 15552000)" }
+                if [duration] >= 15552000 {
+                    mutate {
+                        add_field => {
+                            "[fields][log_overdue]" => true
+                        }
+                    }
+                } else {
+                    mutate {
+                        add_field => {
+                            "[fields][log_overdue]" => false
+                        }
+                    }
+                }
+            } else if [Severity] == "4" {
+                mutate {
+                    add_field => {
+                        "[fields][log_severity]" => "High"
+                    }
+                }
+                ruby { code => "event.set('overdue', event.get('duration') - 2592000)" }
+                if [duration] >= 2592000 {
+                    mutate {
+                        add_field => {
+                            "[fields][log_overdue]" => true
+                        }
+                    }
+                } else {
+                    mutate {
+                        add_field => {
+                            "[fields][log_overdue]" => false
+                        }
+                    }
+                }
+            } else if [Severity] == "5" {
+                mutate {
+                    add_field => {
+                        "[fields][log_severity]" => "Critical"
+                    }
+                }
+                ruby { code => "event.set('overdue', event.get('duration') - 1209600)" }
+                if [duration] >= 1209600 {
+                    mutate {
+                        add_field => {
+                            "[fields][log_overdue]" => true
+                        }
+                    }
+                } else {
+                    mutate {
+                        add_field => {
+                            "[fields][log_overdue]" => false
+                        }
+                    }
+                }
+            }
+        }
+        if [overdue] > -604800 and [overdue] < 0 {
+            mutate {
+                add_field => {
+                    "[fields][log_overdue_before_seven_days]" => true
+                }
+            }
+        } else {
+            mutate {
+                add_field => {
+                    "[fields][log_overdue_before_seven_days]" => false
+                }
+            }
+        }
+{%- for cidr in cidrs %}
+        cidr {
+            address => [ "%{IP}" ]
+            network => [ "{{ cidr['network'] }}" ]
+            add_field => {
+                "[fields][log_project]" => "{{ cidr['project'] }}"
+                "[fields][log_env]" => "{{ cidr['env'] }}"
+                "[fields][log_cloud]" => "{{ cidr['cloud'] }}"
+            }
+        }
+{%- endfor %}
+    }
+}
+
+output {
+    amazon_es {
+        hosts => ["{{ es.hosts }}"]
+        region => "{{ es.region }}"
+        #aws_access_key_id => ''
+        #aws_secret_access_key => ''
+        index => "%{[fields][log_type]}_%{[fields][log_project]}_%{+YYYY}"
+    }
+}
